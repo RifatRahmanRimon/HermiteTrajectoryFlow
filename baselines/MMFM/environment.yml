@@ -1,0 +1,24 @@
+name: mmfm
+channels:
+  - conda-forge
+dependencies:
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchvision
+  - ipywidgets
+  - jupyterlab
+  - matplotlib
+  - numpy
+  - pytorch-lightning
+  - ruff
+  - scikit-learn
+  - scipy
+  - anndata
+  - pandas
+  - seaborn
+  - addict
+  - click
+  - conda-forge::cloudpickle
+  - ipdb
+  - conda-forge::dcor
+  - scienceplots
