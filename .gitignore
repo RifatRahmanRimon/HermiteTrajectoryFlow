@@ -1,0 +1,3 @@
+
+# per-seed data configs materialised by scripts/run_kaggle.py
+hermite_flow/configs/data_configs/*__s[0-9]*.json
