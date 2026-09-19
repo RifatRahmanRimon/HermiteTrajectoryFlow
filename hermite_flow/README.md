@@ -86,11 +86,17 @@ Every second-order config carries a `"pairs"` field, so `--pairs` is optional; p
 | `double_pendulum`     | ✅ (nonlinear, chaotic) | 4 | 2 | `0:2,1:3` |
 | `spring_mass`         | ✅ (linear, multi-DOF) | 6 | 3 | `0:3,1:4,2:5` |
 | `n_body`              | ✅ (nonlinear, 3 bodies 2D) | 12 | 6 | `0:6,1:7,2:8,3:9,4:10,5:11` |
-| `hopperphysics`       | ⏳ needs q/q̇ index check + MuJoCo | 14 | 7 | (confirm before use) |
+| `hopperphysics`       | ✅ (needs `dm_control`/MuJoCo installed) | 14 | 7 | `0:7,1:8,2:9,3:10,4:11,5:12,6:13` |
 | `exp_decay`, `logistic_growth`, `lotka_volterra`, `lorenz` | ❌ no velocity dim | — | — | — |
 
 Each system has four missingness levels via the config suffix:
 `base` = 0, `_sparse` = 0.25, `_v_sparse` = 0.5, `_vv_sparse` = 0.75.
+
+**Hopper note.** State is `qpos` (dims 0–6) then `qvel` (dims 7–13); all joints are
+1-DOF (slide/hinge) so `qvel[i]` is exactly `d/dt qpos[i]`. Trajectories are stored
+on a **physical time grid** (spacing = `physics.timestep()`), which is required for
+`qvel` to be the correct Hermite tangent — do not switch it to a step-index grid.
+Generating Hopper needs MuJoCo: `pip install dm_control`.
 
 ---
 

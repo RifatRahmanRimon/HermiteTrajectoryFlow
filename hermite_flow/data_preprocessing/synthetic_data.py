@@ -486,15 +486,34 @@ def sample_nbody_initial(rng, params):
 
 
 ### hopper physics
-def generate_hopperphysics_trajectories(n_samples, T= 200, D= 14):
+def generate_hopperphysics_trajectories(n_samples, T= 200, D= 14, seed= 123):
+		"""Roll out the dm_control Hopper. State layout is positions-first then
+		velocities: data[..., :nq] = qpos, data[..., nq:] = qvel.
+
+		Returns (data, times) where `times` is the PHYSICAL time grid in seconds
+		(spacing = physics.timestep(), one MuJoCo step per frame). This matters for
+		the Hermite interpolants: qvel is d(qpos)/dt in physical seconds, so the
+		stored times must be physical for qvel to be the correct tangent of qpos.
+		Using a step-index grid (e.g. 0,1,2,...) would put a spurious 1/dt scale on
+		the pairing. Hopper joints are all 1-DOF (slide/hinge) so nq == nv and
+		qvel[i] is exactly the derivative of qpos[i]."""
 
 		from dm_control import suite  # lazy import; MuJoCo dependency only for Hopper
 		env = suite.load('hopper', 'stand')
 		physics = env.physics
 
-		# Store the state of the RNG to restore later.
+		nq, nv = int(physics.model.nq), int(physics.model.nv)
+		assert nq == D // 2 and nv == D // 2, (
+			f"Hopper state layout mismatch: nq={nq}, nv={nv}, but D//2={D // 2}. "
+			f"Set D=nq+nv and update the --pairs mapping (p:p+nq for p in range(nq)).")
+
+		dt = float(physics.timestep())              # physical seconds per physics.step()
+		times = (np.arange(T, dtype=np.float32) * dt)
+
+		# Store the state of the RNG to restore later; seed initial conditions
+		# reproducibly from the caller's seed.
 		st0 = np.random.get_state()
-		np.random.seed(123)
+		np.random.seed(seed)
 
 		data = np.zeros((n_samples, T, D))
 		for i in range(n_samples):
@@ -510,7 +529,7 @@ def generate_hopperphysics_trajectories(n_samples, T= 200, D= 14):
 
 		# Restore RNG.
 		np.random.set_state(st0)
-		return data
+		return data, times
 
 
 ## pendulum videos
@@ -702,16 +721,19 @@ def generate_family(family_name, num_param_configs, trajectories_per_config, tim
         elif family_name =='hopperphysics':
             state_dim_hopper= spec["dim"]
             num_samples= trajectories_per_config
-            simulated_paths= generate_hopperphysics_trajectories(num_samples, T= len(times), D= state_dim_hopper)
+            # hopper_times is the PHYSICAL time grid (seconds); we store that, not the
+            # config's step-index grid, so qvel is the correct tangent of qpos.
+            simulated_paths, hopper_times = generate_hopperphysics_trajectories(
+                num_samples, T= len(times), D= state_dim_hopper,
+                seed= seed if seed is not None else 123)
             for i in range(trajectories_per_config):
                 values = simulated_paths[i]
                 # values, mask = apply_missingness(values.copy(), missing_prob, rng)
                 mask = get_mask(values.copy(), missing_prob, rng, mask_mode=mask_mode)
-                normalized_times= times/(times[-1]-times[0])
                 trajectories.append(
                     {
                         "family": family_name,
-                        "times": times.copy(),
+                        "times": hopper_times.copy(),
                         "values": values,
                         "mask": mask.astype(np.float32),
                         "params": {'placeholder': 0},

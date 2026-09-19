@@ -43,7 +43,10 @@ INCLUDE_LINEAR="${INCLUDE_LINEAR:-0}"  # 1 = also run the linear interpolant (ab
 #   1 dof : harmonic_oscillator, damped_harmonic, pendulum, duffing
 #   2 dof : double_pendulum        3 dof : spring_mass        6 dof : n_body (2D,3)
 #
-# Systems to sweep (override with SYSTEMS="pendulum duffing" bash scripts/... ).
+# Systems to sweep. Default = the 7 dependency-free simulated datasets. The 8th,
+# hopperphysics, needs MuJoCo (`pip install dm_control`); add it once installed:
+#   SYSTEMS="damped_harmonic harmonic_oscillator pendulum duffing double_pendulum spring_mass n_body hopperphysics"
+# Override freely, e.g. SYSTEMS="pendulum duffing" bash scripts/run_experiments_hermite.sh
 SYSTEMS="${SYSTEMS:-damped_harmonic harmonic_oscillator pendulum duffing double_pendulum spring_mass n_body}"
 
 run_system () {

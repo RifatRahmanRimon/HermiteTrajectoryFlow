@@ -54,6 +54,40 @@ environment and README — run whichever comparisons your table needs.
 
 ---
 
+## Experiment plan (current)
+
+For now we run **8 synthetic datasets × 4 methods**.
+
+**8 datasets** (all have velocity paired with position; each run at 4 missingness
+levels — ρ = 0 / 0.25 / 0.5 / 0.75 via the `base` / `_sparse` / `_v_sparse` /
+`_vv_sparse` configs, all under `--mask_mode per_dof`):
+
+| # | dataset | type | state dim |
+|---|---|---|---|
+| 1 | `harmonic_oscillator` | linear | 2 |
+| 2 | `damped_harmonic` | linear | 2 |
+| 3 | `pendulum` | nonlinear | 2 |
+| 4 | `duffing` | nonlinear | 2 |
+| 5 | `double_pendulum` | nonlinear, chaotic | 4 |
+| 6 | `spring_mass` | linear, multi-DOF | 6 |
+| 7 | `n_body` | nonlinear (3 bodies, 2D) | 12 |
+| 8 | `hopperphysics` | MuJoCo (needs `dm_control`) | 14 |
+
+**4 methods:**
+
+| method | how it's run |
+|---|---|
+| **hedge** | `hermite_flow`, `--interpolant_kind hermite_hedge` |
+| **pure** | `hermite_flow`, `--interpolant_kind hermite_pure` |
+| **SplineFlow** | `hermite_flow`, `--interpolant_kind bspline --degree 3` (same pipeline) |
+| **TFM** | separate repo `baselines/TFM` (own env); ρ=0 comparison only |
+
+hedge / pure / SplineFlow run in the one pipeline under `per_dof` (the sweep does
+all three); TFM is run separately. MMFM / MMSFM are available as further baselines
+but are not part of this current round.
+
+---
+
 ## 1. Our method + SplineFlow (one pipeline)
 
 ```bash
