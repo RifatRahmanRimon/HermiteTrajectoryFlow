@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import json
 import os
+import random
 import torch
 from torch import nn
 from models.NN_models import MLP
@@ -43,7 +44,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dynamics_kind", type=str, default="ode", choices=["ode", "sde_constant_sigma", "sde_quadratic_sigma", "sde_time_varying_sigma"], help="whether we have ode/sde dynamics")
     parser.add_argument("--pairs", type=str, default="", help="position:velocity index pairs for the hermite interpolants, e.g. '0:1,2:3'; empty means no pairs")
     parser.add_argument("--mask_mode", type=str, default="per_dim", choices=["per_dim", "per_dof"], help="missingness granularity: per_dim (independent, paper-comparable) or per_dof (drops the whole state at a time step)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for training RNG (torch/numpy/random): model init, conditional-path noise, and DataLoader shuffling")
     return parser.parse_args()
+
+
+def set_seed(seed):
+    """Seed every RNG that affects a training run so results are reproducible.
+
+    Data generation is already seeded via the data_config; this covers the torch
+    side: model weight init, the torch.randn_like conditional-path noise, and the
+    DataLoader(shuffle=True) order (which uses the global torch RNG when
+    num_workers=0, as here)."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def parse_pairs(pairs_str):
@@ -59,6 +75,23 @@ def parse_pairs(pairs_str):
         p, v = tok.split(":")
         out.append((int(p), int(v)))
     return out
+
+
+def resolve_pairs(args):
+    """Determine the (position, velocity) pairs for this run.
+
+    Priority: an explicit --pairs on the command line wins; otherwise fall back
+    to a "pairs" field in the data_config JSON (so the user does not have to know
+    each system's state dimension / DOF layout). Returns a list of (p, v) tuples.
+    """
+    if args.pairs.strip():
+        return parse_pairs(args.pairs)
+    cfg_path = PROJECT_ROOT / "configs" / "data_configs" / f"{args.data_config}.json"
+    try:
+        cfg = json.load(open(cfg_path))
+    except FileNotFoundError:
+        return []
+    return parse_pairs(cfg.get("pairs", ""))
 
 
 def prepare_flow_matching_batch(batch, interpolant_kind="linear", degree=3, subsample_per_interval=8, device=None):
@@ -243,7 +276,14 @@ def evaluate(model: nn.Module, score_model: nn.Module, loader, interpolant_kind=
 
 def main() -> None:
     args = parse_args()
-    pairs = parse_pairs(args.pairs)
+    set_seed(args.seed)
+    pairs = resolve_pairs(args)
+    if args.interpolant_kind in ("hermite_hedge", "hermite_pure") and not pairs:
+        print(f"[warning] interpolant_kind={args.interpolant_kind} but no (position:velocity) "
+              f"pairs were resolved for data_config={args.data_config!r}. Pass e.g. "
+              f"--pairs 0:1, or add a \"pairs\" field to the config. Falling back to plain "
+              f"B-splines for every dimension (i.e. the bspline baseline).")
+    print(f"[config] seed={args.seed}  mask_mode={args.mask_mode}  pairs={pairs or 'none'}")
     base = str(PROJECT_ROOT / "results" / f"{args.exp_name}_{args.data_config}_{args.interpolant_kind}_{args.mask_mode}")
     # find a free directory
     save_dir = Path(base)
@@ -257,6 +297,8 @@ def main() -> None:
 
     logging.basicConfig(filename=str(Path(save_dir) / "log.txt"), level=logging.INFO)
     log = logging.getLogger()
+    log.info(f"seed={args.seed} mask_mode={args.mask_mode} pairs={pairs} "
+             f"interpolant_kind={args.interpolant_kind} data_config={args.data_config}")
     epoch_dict= {'train':[], 'test':[], 'time_preprocessing':[], 'time':[]}
     final_dict= {'train':[], 'test':[], 'time_preprocessing':[], 'time':[]}
 

@@ -1,6 +1,6 @@
 {
     "reqs": {
-        "harmonic_oscillator": {
+        "pendulum": {
             "num_param_configs": 1,
             "trajectories_per_config": 1000
         }

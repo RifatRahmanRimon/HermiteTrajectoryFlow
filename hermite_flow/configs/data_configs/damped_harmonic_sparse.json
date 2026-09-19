@@ -1,11 +1,11 @@
 {
     "reqs": {
-        "harmonic_oscillator": {
+        "damped_harmonic": {
             "num_param_configs": 1,
             "trajectories_per_config": 1000
         }
     },
-    "missing_prob": 0.75,
+    "missing_prob": 0.25,
     "seed": 42,
     "fill_method": "nofill",
     "synthetic": true,

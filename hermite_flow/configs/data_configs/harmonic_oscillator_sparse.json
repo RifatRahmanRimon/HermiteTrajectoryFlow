@@ -9,5 +9,10 @@
     "seed": 42,
     "fill_method": "nofill",
     "synthetic": true,
-    "times": [0,10, 0.05]
-    }
+    "times": [
+        0,
+        10,
+        0.05
+    ],
+    "pairs": "0:1"
+}
