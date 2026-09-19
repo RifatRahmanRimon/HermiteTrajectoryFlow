@@ -135,6 +135,22 @@ constructions (lines ~268-269).
   Hopper state is assembled, confirm which indices are `q` and which are `q_dot`,
   and report the finding before running anything on it.
 
+  > **FLAGGED, NOT FIXED — Hopper ignores the config seed.**
+  > `generate_hopperphysics_trajectories` (`synthetic_data.py`) hardcodes
+  > `np.random.seed(123)` and never reads the `seed` field from the data config,
+  > unlike every `family_via_ivp` family which threads `seed` through
+  > `generate_family`. Consequences: (a) all four `hopperphysics*` sparsity
+  > configs contain **byte-identical trajectories** and differ only in the mask;
+  > (b) Hopper has **no seed-variation axis**, so multi-seed error bars are not
+  > available for it without changing that function. The seed should be driven
+  > from the config like every other family. Deliberately left as-is for now so
+  > current numbers stay reproducible against the written code — revisit before
+  > any multi-seed Hopper result is reported.
+  >
+  > Related: the function allocates `np.zeros((n, T, D))`, so Hopper values are
+  > **float64** while every other family is float32. That is why the Hopper
+  > pickles are ~34 MB per config rather than ~17 MB.
+
 ---
 
 ## 4. The mask problem
@@ -220,6 +236,23 @@ done
 
 Then the same for `harmonic_oscillator*`. Hopper last, and only after the state
 layout is confirmed.
+
+### Tier-2 systems (added beyond the paper's three)
+
+Five further mechanical families live in `synthetic_data.py` under
+`family_via_ivp`, all with the layout **positions first, then velocities**, so a
+system with `n` degrees of freedom pairs as `i:(i+n)`:
+
+| config prefix | `D` | `--pairs` | `times` | note |
+|---|---|---|---|---|
+| `pendulum` | 2 | `0:1` | `[0,10,0.05]` | energy-capped below the separatrix, so theta librates |
+| `double_pendulum` | 4 | `0:2,1:3` | `[0,10,0.05]` | chaotic but bounded |
+| `duffing` | 2 | `0:1` | `[0,20,0.1]` | **non-autonomous** (forced) -- the only such family |
+| `spring_mass_chain` | 10 | `0:5,1:6,2:7,3:8,4:9` | `[0,20,0.1]` | `SPRING_CHAIN_N = 5`, both ends pinned |
+| `nbody` | 12 | `0:6,1:7,2:8,3:9,4:10,5:11` | `[0,10,0.05]` | `NBODY_N = 3`, Plummer-softened, jittered ring ICs |
+
+Each has the same four sparsity configs. `T = 200` for all of them, matching
+tier 1, so per-run compute is the same across every system.
 
 ### Numbers to beat (MSE, from the paper)
 

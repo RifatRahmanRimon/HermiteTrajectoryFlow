@@ -12,6 +12,13 @@ ODE
 
 8. hopperphysics
 
+tier-2 mechanical systems (positions first, then velocities -- pair map i:(i+n))
+1. pendulum            D=2
+2. double_pendulum     D=4
+3. duffing             D=2   (non-autonomous: harmonically forced)
+4. spring_mass_chain   D=10
+5. nbody               D=12  (planar, softened)
+
 sde
 1. exponential
 2. damped harmonic
@@ -350,6 +357,235 @@ def sample_linear_initial(rng, params):
 
 
 
+# ---------------------------------------------------------------------------
+# Tier-2 mechanical systems (added for the Hermite work).
+#
+# Every family below carries an explicit (position, velocity) split so the
+# Hermite interpolants have a genuinely observed velocity coordinate to clamp
+# on.  The state layout is ALWAYS "all positions first, then all velocities" --
+# the convention `generate_hopperphysics_trajectories` already uses for
+# qpos/qvel -- so a system with n degrees of freedom pairs as i:(i+n):
+#
+#     pendulum            D=2   --pairs 0:1
+#     double_pendulum     D=4   --pairs 0:2,1:3
+#     duffing             D=2   --pairs 0:1
+#     spring_mass_chain   D=10  --pairs 0:5,1:6,2:7,3:8,4:9
+#     nbody               D=12  --pairs 0:6,1:7,2:8,3:9,4:10,5:11
+#
+# Params are kept scalar-only, matching the existing families: `params` is
+# flattened by IrregularDataset.__getitem__ and collated by the default
+# DataLoader collate_fn, and scalars keep that path trivial.
+# ---------------------------------------------------------------------------
+
+G_ACCEL = 9.81            # gravitational acceleration [m/s^2]
+SPRING_CHAIN_N = 5        # masses in the chain          -> dim = 2 * N
+NBODY_N = 3               # bodies in the planar n-body  -> dim = 4 * N
+
+
+## simple pendulum (nonlinear, optionally damped) -- state = [theta, omega]
+def rhs_pendulum(t, state, params):
+    theta, omega = state
+    return np.array([
+        omega,
+        -(G_ACCEL / params["length"]) * np.sin(theta) - params["damping"] * omega,
+    ])
+
+
+def sample_pendulum_params(rng):
+    return {
+        "length": rng.uniform(0.5, 2.0),
+        "damping": rng.uniform(0.0, 0.3),
+    }
+
+
+def sample_pendulum_initial(rng, params):
+    """Libration-only initial conditions.
+
+    Above the separatrix the bob goes over the top and `theta` grows without
+    bound, turning the position coordinate into a ramp and making the
+    interpolation comparison meaningless.  Draw theta first, then spend at most
+    90% of the separatrix energy E_sep = 2 * g/L on the remaining kinetic term.
+    """
+    w2 = G_ACCEL / params["length"]
+    theta = rng.uniform(-2.2, 2.2)
+    e_budget = 0.9 * 2.0 * w2 - w2 * (1.0 - np.cos(theta))
+    omega_max = np.sqrt(max(2.0 * e_budget, 0.0))
+    return np.array([theta, rng.uniform(-omega_max, omega_max)])
+
+
+## double pendulum -- state = [theta1, theta2, omega1, omega2]
+def rhs_double_pendulum(t, state, params):
+    th1, th2, w1, w2 = state
+    m1, m2 = params["mass1"], params["mass2"]
+    l1, l2 = params["length1"], params["length2"]
+    d = th2 - th1
+    sin_d, cos_d = np.sin(d), np.cos(d)
+
+    den1 = (m1 + m2) * l1 - m2 * l1 * cos_d * cos_d
+    dw1 = (
+        m2 * l1 * w1 * w1 * sin_d * cos_d
+        + m2 * G_ACCEL * np.sin(th2) * cos_d
+        + m2 * l2 * w2 * w2 * sin_d
+        - (m1 + m2) * G_ACCEL * np.sin(th1)
+    ) / den1
+
+    den2 = (l2 / l1) * den1
+    dw2 = (
+        -m2 * l2 * w2 * w2 * sin_d * cos_d
+        + (m1 + m2) * G_ACCEL * np.sin(th1) * cos_d
+        - (m1 + m2) * l1 * w1 * w1 * sin_d
+        - (m1 + m2) * G_ACCEL * np.sin(th2)
+    ) / den2
+
+    return np.array([w1, w2, dw1, dw2])
+
+
+def sample_double_pendulum_params(rng):
+    return {
+        "mass1": rng.uniform(0.8, 1.2),
+        "mass2": rng.uniform(0.8, 1.2),
+        "length1": rng.uniform(0.8, 1.2),
+        "length2": rng.uniform(0.8, 1.2),
+    }
+
+
+def sample_double_pendulum_initial(rng, params):
+    """Modest angles and slow starts.
+
+    The double pendulum is chaotic at any non-trivial energy; this keeps the
+    trajectories chaotic-but-bounded rather than sending either arm over the
+    top, which would make theta unbounded exactly as in the single-pendulum
+    case.
+    """
+    return np.array([
+        rng.uniform(-1.0, 1.0),
+        rng.uniform(-1.0, 1.0),
+        rng.uniform(-0.5, 0.5),
+        rng.uniform(-0.5, 0.5),
+    ])
+
+
+## Duffing oscillator (damped, double-well, harmonically forced) -- state = [x, v]
+def rhs_duffing(t, state, params):
+    """NOTE: the only NON-AUTONOMOUS family in this file -- the forcing term
+    depends on `t` explicitly, so the velocity field the MLP learns is a genuine
+    function of (x, t) rather than of x alone."""
+    x, v = state
+    return np.array([
+        v,
+        -params["delta"] * v
+        - params["alpha"] * x
+        - params["beta"] * x ** 3
+        + params["gamma"] * np.cos(params["omega"] * t),
+    ])
+
+
+def sample_duffing_params(rng):
+    # alpha < 0 with beta > 0 is the classic double-well; delta/gamma/omega are
+    # drawn around the mildly chaotic regime (delta~0.2, gamma~0.3, omega~1.0).
+    return {
+        "alpha": rng.uniform(-1.2, -0.8),
+        "beta": rng.uniform(0.8, 1.2),
+        "delta": rng.uniform(0.1, 0.3),
+        "gamma": rng.uniform(0.2, 0.4),
+        "omega": rng.uniform(0.9, 1.3),
+    }
+
+
+def sample_duffing_initial(rng, params):
+    return np.array([rng.uniform(-1.5, 1.5), rng.uniform(-1.0, 1.0)])
+
+
+## linear spring-mass chain, both ends pinned to fixed walls
+## state = [q_1 .. q_N, v_1 .. v_N]
+def rhs_spring_chain(t, state, params):
+    n = SPRING_CHAIN_N
+    q, v = state[:n], state[n:]
+    k, c, m = params["stiffness"], params["damping"], params["mass"]
+    # fixed walls: q_0 = q_{N+1} = 0
+    padded = np.concatenate(([0.0], q, [0.0]))
+    coupling = padded[:-2] - 2.0 * q + padded[2:]
+    return np.concatenate([v, (k * coupling - c * v) / m])
+
+
+def sample_spring_chain_params(rng):
+    return {
+        "stiffness": rng.uniform(0.5, 2.0),
+        "damping": rng.uniform(0.0, 0.2),
+        "mass": rng.uniform(0.8, 1.2),
+    }
+
+
+def sample_spring_chain_initial(rng, params):
+    n = SPRING_CHAIN_N
+    return np.concatenate([
+        rng.uniform(-1.0, 1.0, size=n),
+        rng.uniform(-0.5, 0.5, size=n),
+    ])
+
+
+## planar gravitational n-body, softened
+## state = [x_1, y_1, .., x_N, y_N, vx_1, vy_1, .., vx_N, vy_N]
+def rhs_nbody(t, state, params):
+    n = NBODY_N
+    pos = state[: 2 * n].reshape(n, 2)
+    vel = state[2 * n :].reshape(n, 2)
+    g, m, eps2 = params["gravity"], params["mass"], params["softening"] ** 2
+
+    diff = pos[None, :, :] - pos[:, None, :]      # diff[i, j] = r_j - r_i
+    # Plummer softening: without eps the integrator stalls (and
+    # integrate_with_scipy raises) on close encounters.
+    inv_r3 = ((diff ** 2).sum(-1) + eps2) ** -1.5
+    np.fill_diagonal(inv_r3, 0.0)                 # no self-interaction
+    acc = g * m * (diff * inv_r3[:, :, None]).sum(axis=1)
+
+    return np.concatenate([vel.ravel(), acc.ravel()])
+
+
+def sample_nbody_params(rng):
+    # Equal masses: the `vel -= vel.mean(0)` below is only the barycentric
+    # momentum correction when every body weighs the same.
+    return {
+        "gravity": 1.0,
+        "mass": rng.uniform(0.8, 1.2),
+        "softening": 0.2,
+    }
+
+
+def sample_nbody_initial(rng, params):
+    """A jittered rotating ring.
+
+    Uniformly random positions let two bodies start arbitrarily close, which
+    produces a near-singular acceleration, ejects a body, and turns its
+    coordinate into an unbounded ramp -- the same failure the pendulum energy
+    cap avoids.  Instead the bodies start near a regular N-gon, the exact
+    relative equilibrium of the equal-mass problem, at its circular speed:
+
+        v^2 = G m / (4 r) * sum_{j=1}^{N-1} 1 / sin(pi j / N)
+
+    (for N=3 this is the Lagrange equilateral triangle).  The jitter below makes
+    the orbits quasi-periodic rather than exactly periodic while keeping every
+    body bound for the whole time span.
+    """
+    n = NBODY_N
+    r0 = rng.uniform(1.0, 1.4)
+    angle = 2.0 * np.pi * np.arange(n) / n + rng.uniform(-0.08, 0.08, size=n)
+    radius = r0 * (1.0 + rng.uniform(-0.08, 0.08, size=n))
+    pos = np.stack([radius * np.cos(angle), radius * np.sin(angle)], axis=1)
+    pos -= pos.mean(axis=0)
+
+    j = np.arange(1, n)
+    ring_sum = np.sum(1.0 / np.sin(np.pi * j / n))
+    v_circ = np.sqrt(params["gravity"] * params["mass"] * ring_sum / (4.0 * r0))
+
+    r = np.maximum(np.linalg.norm(pos, axis=1, keepdims=True), 1e-3)
+    tangent = np.stack([-pos[:, 1], pos[:, 0]], axis=1) / r
+    vel = tangent * v_circ * rng.uniform(0.92, 1.08, size=(n, 1))
+    vel -= vel.mean(axis=0)
+
+    return np.concatenate([pos.ravel(), vel.ravel()])
+
+
 ### hopper physics
 def generate_hopperphysics_trajectories(n_samples, T= 200, D= 14):
 
@@ -440,7 +676,40 @@ FAMILIES = {
         "sample_initial": sample_lorenz_initial,
     },
 
-    # ---------------- sdes ----------------
+    ## ---------- tier-2 mechanical systems (positions first, then velocities) ----------
+
+    "pendulum": {
+        "dim": 2,
+        "rhs": rhs_pendulum,
+        "sample_params": sample_pendulum_params,
+        "sample_initial": sample_pendulum_initial,
+    },
+    "double_pendulum": {
+        "dim": 4,
+        "rhs": rhs_double_pendulum,
+        "sample_params": sample_double_pendulum_params,
+        "sample_initial": sample_double_pendulum_initial,
+    },
+    "duffing": {
+        "dim": 2,
+        "rhs": rhs_duffing,
+        "sample_params": sample_duffing_params,
+        "sample_initial": sample_duffing_initial,
+    },
+    "spring_mass_chain": {
+        "dim": 2 * SPRING_CHAIN_N,
+        "rhs": rhs_spring_chain,
+        "sample_params": sample_spring_chain_params,
+        "sample_initial": sample_spring_chain_initial,
+    },
+    "nbody": {
+        "dim": 4 * NBODY_N,
+        "rhs": rhs_nbody,
+        "sample_params": sample_nbody_params,
+        "sample_initial": sample_nbody_initial,
+    },
+
+    ## ---------------- sdes ----------------
     # 1) exponential (OU)
     "exp_decay_sde": {
         "kind": "sde",
@@ -501,7 +770,8 @@ FAMILIES = {
     }
 }
 
-family_via_ivp= ["exp_decay", "logistic_growth", "harmonic_oscillator", "damped_harmonic", "lotka_volterra", "lorenz"]
+family_via_ivp= ["exp_decay", "logistic_growth", "harmonic_oscillator", "damped_harmonic", "lotka_volterra", "lorenz",
+                 "pendulum", "double_pendulum", "duffing", "spring_mass_chain", "nbody"]
 family_sde= ["exp_decay_sde", "damped_harmonic_sde", "lotka_volterra_sde", "lorenz_sde"]
 
 def generate_family(family_name, num_param_configs, trajectories_per_config, times=[0.0, 10.0, 0.1], missing_prob=0.0, seed=None, mask_mode='per_dim'):
