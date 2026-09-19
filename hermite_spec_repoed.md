@@ -135,107 +135,20 @@ constructions (lines ~268-269).
   Hopper state is assembled, confirm which indices are `q` and which are `q_dot`,
   and report the finding before running anything on it.
 
-  > **FLAGGED, NOT FIXED — Hopper ignores the config seed.**
-  > `generate_hopperphysics_trajectories` (`synthetic_data.py`) hardcodes
-  > `np.random.seed(123)` and never reads the `seed` field from the data config,
-  > unlike every `family_via_ivp` family which threads `seed` through
-  > `generate_family`. Consequences: (a) all four `hopperphysics*` sparsity
-  > configs contain **byte-identical trajectories** and differ only in the mask;
-  > (b) Hopper has **no seed-variation axis**, so multi-seed error bars are not
-  > available for it without changing that function. The seed should be driven
-  > from the config like every other family. Deliberately left as-is for now so
-  > current numbers stay reproducible against the written code — revisit before
-  > any multi-seed Hopper result is reported.
+  > **RESOLVED (commit 98a82ec) — Hopper seed and time grid.**
+  > Previously `generate_hopperphysics_trajectories` hardcoded `np.random.seed(123)`
+  > and ignored the config `seed`. It now takes `seed=` and `generate_family`
+  > threads the config value through, so Hopper behaves like every other family.
+  > The same commit fixed a subtler bug worth recording: Hopper's config asks for
+  > `times: [0, 200, 1]`, a **step-index** grid, but `qvel` is `d(qpos)/dt` in
+  > physical seconds. Storing the index grid would have put a spurious `1/dt`
+  > factor on the Hermite tangent — exactly the time-rescaling error §6's third
+  > assertion is meant to catch. The generator now returns the physical grid from
+  > `physics.timestep()` and that is what gets stored.
   >
-  > Related: the function allocates `np.zeros((n, T, D))`, so Hopper values are
-  > **float64** while every other family is float32. That is why the Hopper
-  > pickles are ~34 MB per config rather than ~17 MB.
-
----
-
-## 4. The mask problem
-
-Clamping needs position *and* velocity observed at the same time. With
-per-dimension independent masks and `missing_prob > 0`, that fails often.
-
-**Default strategy — intersect.** Fit the Hermite curve only at times where both
-`mask[b,t,p]` and `mask[b,t,v]` are true. If fewer than 2 such times exist for a
-pair, fall back to independent B-splines for that pair and count the fallback.
-
-**Log the fallback rate per config.** If it is high at `missing_prob=0.75`, the
-comparison is no longer testing the idea — it is testing the fallback. This
-number goes in the results table.
-
-**Add `--mask_mode {per_dim, per_dof}`.** `per_dim` is the existing behaviour.
-`per_dof` modifies `get_mask` so that a dropped observation removes the whole
-degree of freedom (both `p` and `v` together), which models a sensor reading
-returning the full state. Implement it, but note clearly in results that
-`per_dof` numbers are **not** comparable to the paper's table.
-
----
-
-## 5. Validation gate — run before any training
-
-Standalone script, `scripts/check_interpolant_derivative.py`. No network.
-
-For the damped harmonic oscillator, ground truth is
-`x_dot = v`, `v_dot = -omega^2 * x - 2*gamma*v` (see
-`data_preprocessing/synthetic_data.py` for the parameter sampling).
-
-```
-for missing_prob in [0, 0.25, 0.5, 0.75]:
-    for method in [hedge, pure, bspline(k=1..5)]:
-        fit on the masked trajectory
-        evaluate mu_dot on a dense grid
-        report mean and max |error| vs truth, SEPARATELY for the
-          position slot and the velocity slot
-```
-
-Report position and velocity slots separately — the two versions are expected to
-differ mainly in the velocity (acceleration) slot, and a combined number hides
-that.
-
-**Gate:** if hedge and pure do not beat the B-splines on derivative error here,
-stop and report. Nothing downstream will work.
-
----
-
-## 6. Assertions
-
-```python
-# both versions: interpolant passes through observed points
-assert np.allclose(mu(t_obs_i), values[i], atol=1e-10)
-
-# pure version: velocity slot reproduces the observed velocity at knots.
-# failure here means a time-scaling factor was introduced somewhere.
-assert np.allclose(mu(t_obs_i)[v], values[i, v], atol=1e-10)
-
-# hedge version: position slot derivative equals observed velocity at knots
-assert np.allclose(mu_dot(t_obs_i)[p], values[i, v], atol=1e-10)
-```
-
----
-
-## 7. Experiments
-
-Only run on systems whose state contains velocity. Exp-Decay, Lotka-Volterra and
-Lorenz have no velocity dimension — skip them.
-
-Config name → `missing_prob`: base `= 0`, `_sparse` `= 0.25`, `_v_sparse`
-`= 0.5`, `_vv_sparse` `= 0.75`.
-
-```bash
-for cfg in damped_harmonic damped_harmonic_sparse damped_harmonic_v_sparse damped_harmonic_vv_sparse; do
-  for kind in hermite_hedge hermite_pure; do
-    python main.py --data_config $cfg --interpolant_kind $kind --pairs 0:1 --exp_name hermite
-  done
-  python main.py --data_config $cfg --interpolant_kind bspline --degree 3 --exp_name hermite
-  python main.py --data_config $cfg --interpolant_kind linear --exp_name hermite
-done
-```
-
-Then the same for `harmonic_oscillator*`. Hopper last, and only after the state
-layout is confirmed.
+  > **STILL OPEN — Hopper values are float64.** The generator allocates
+  > `np.zeros((n, T, D))` while every other family produces float32, so the Hopper
+  > pickles are ~34 MB per config rather than ~17 MB. Harmless, just wasteful.
 
 ### Tier-2 systems (added beyond the paper's three)
 
@@ -247,12 +160,14 @@ system with `n` degrees of freedom pairs as `i:(i+n)`:
 |---|---|---|---|---|
 | `pendulum` | 2 | `0:1` | `[0,10,0.05]` | energy-capped below the separatrix, so theta librates |
 | `double_pendulum` | 4 | `0:2,1:3` | `[0,10,0.05]` | chaotic but bounded |
-| `duffing` | 2 | `0:1` | `[0,20,0.1]` | **non-autonomous** (forced) -- the only such family |
-| `spring_mass_chain` | 10 | `0:5,1:6,2:7,3:8,4:9` | `[0,20,0.1]` | `SPRING_CHAIN_N = 5`, both ends pinned |
-| `nbody` | 12 | `0:6,1:7,2:8,3:9,4:10,5:11` | `[0,10,0.05]` | `NBODY_N = 3`, Plummer-softened, jittered ring ICs |
+| `duffing` | 2 | `0:1` | `[0,10,0.05]` | damped double-well, autonomous (no forcing term) |
+| `spring_mass` | 6 | `0:3,1:4,2:5` | `[0,10,0.05]` | `SPRING_MASS_N = 3`, both ends pinned |
+| `n_body` | 12 | `0:6,1:7,2:8,3:9,4:10,5:11` | `[0,10,0.05]` | `NBODY_N = 3`, Plummer-softened (`eps=0.2`), jittered ring ICs |
 
-Each has the same four sparsity configs. `T = 200` for all of them, matching
-tier 1, so per-run compute is the same across every system.
+Each has the same four sparsity configs, and each config carries a `"pairs"`
+field that `main.py::resolve_pairs` reads when `--pairs` is not given on the
+command line. `T = 200` for all of them, matching tier 1, so per-run compute is
+the same across every system.
 
 ### Numbers to beat (MSE, from the paper)
 

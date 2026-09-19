@@ -1,11 +1,11 @@
 {
     "reqs": {
-        "nbody": {
+        "spring_mass": {
             "num_param_configs": 1,
             "trajectories_per_config": 1000
         }
     },
-    "missing_prob": 0.25,
+    "missing_prob": 0.75,
     "seed": 42,
     "fill_method": "nofill",
     "synthetic": true,
@@ -13,5 +13,6 @@
         0,
         10,
         0.05
-    ]
+    ],
+    "pairs": "0:3,1:4,2:5"
 }

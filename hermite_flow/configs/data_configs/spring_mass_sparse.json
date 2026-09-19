@@ -1,17 +1,18 @@
 {
     "reqs": {
-        "spring_mass_chain": {
+        "spring_mass": {
             "num_param_configs": 1,
             "trajectories_per_config": 1000
         }
     },
-    "missing_prob": 0.75,
+    "missing_prob": 0.25,
     "seed": 42,
     "fill_method": "nofill",
     "synthetic": true,
     "times": [
         0,
-        20,
-        0.1
-    ]
+        10,
+        0.05
+    ],
+    "pairs": "0:3,1:4,2:5"
 }

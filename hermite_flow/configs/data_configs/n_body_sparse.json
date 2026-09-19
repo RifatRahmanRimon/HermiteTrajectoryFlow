@@ -1,6 +1,6 @@
 {
     "reqs": {
-        "spring_mass_chain": {
+        "n_body": {
             "num_param_configs": 1,
             "trajectories_per_config": 1000
         }
@@ -11,7 +11,8 @@
     "synthetic": true,
     "times": [
         0,
-        20,
-        0.1
-    ]
+        10,
+        0.05
+    ],
+    "pairs": "0:6,1:7,2:8,3:9,4:10,5:11"
 }

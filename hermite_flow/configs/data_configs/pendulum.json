@@ -5,7 +5,7 @@
             "trajectories_per_config": 1000
         }
     },
-    "missing_prob": 0,
+    "missing_prob": 0.0,
     "seed": 42,
     "fill_method": "nofill",
     "synthetic": true,
@@ -13,5 +13,6 @@
         0,
         10,
         0.05
-    ]
+    ],
+    "pairs": "0:1"
 }

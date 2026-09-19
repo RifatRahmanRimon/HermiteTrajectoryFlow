@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Section 7 experiment sweep for the Hermite conditional paths.
 #
-# Scope (see hermite_spec_repoed.md sec 7): only systems whose state contains
-# velocity. Exp-Decay / Lotka-Volterra / Lorenz have no velocity dim -> skipped.
-# Hopper is left out until its state layout (which indices are q vs q_dot) is
-# confirmed from data_preprocessing/synthetic_data.py.
+# Scope: only systems whose state contains velocity paired with position.
+# Included: harmonic_oscillator, damped_harmonic (linear); pendulum, duffing,
+# double_pendulum, n_body (nonlinear); spring_mass (linear, multi-DOF).
+# Skipped: exp_decay / logistic / lotka_volterra / lorenz (no velocity dim).
+# Hopper is left out until its q / q_dot index split is confirmed.
 #
 # Masking: --mask_mode per_dof is the DEFAULT here, matching the paper's scope
 # (a missing sample drops the paired position+velocity together). The repo's
@@ -22,27 +23,52 @@
 set -euo pipefail
 
 EXP_NAME="${EXP_NAME:-hermite}"
-MASK_MODE="${MASK_MODE:-per_dof}"      # per_dof (paper scope) | per_dim (repo default)
+MASK_MODE="${MASK_MODE:-per_dof}"      # DECIDED DEFAULT: per_dof (paired-sensor scope; drops the
+                                       # whole paired state together). Baselines (bspline) run under
+                                       # the SAME mask_mode, so the comparison is fair. Use per_dim
+                                       # only to reproduce the original SplineFlow per-coordinate numbers.
 EPOCHS="${EPOCHS:-10000}"
-PAIRS="0:1"                            # (x, v) for both oscillator systems
+SEED="${SEED:-42}"
+INCLUDE_LINEAR="${INCLUDE_LINEAR:-0}"  # 1 = also run the linear interpolant (ablation, NOT a paper baseline)
+
+# Baselines produced by this sweep:
+#   hermite_hedge / hermite_pure  -> the proposed method
+#   bspline (--degree 3)          -> the SplineFlow baseline (paper's "SplineFlow" numbers)
+#   linear                        -> extra ablation, off by default (INCLUDE_LINEAR=1 to add)
+# The TFM baseline is a SEPARATE codebase (../baselines/TFM); see the top-level README.
+
+# The (position:velocity) pairs live in each data_config JSON ("pairs" field), so
+# main.py resolves them automatically -- no need to pass --pairs here. State is
+# positions-first then velocities, so dof p pairs with p + n_dof:
+#   1 dof : harmonic_oscillator, damped_harmonic, pendulum, duffing
+#   2 dof : double_pendulum        3 dof : spring_mass        6 dof : n_body (2D,3)
+#
+# Systems to sweep. Default = the 7 dependency-free simulated datasets. The 8th,
+# hopperphysics, needs MuJoCo (`pip install dm_control`); add it once installed:
+#   SYSTEMS="damped_harmonic harmonic_oscillator pendulum duffing double_pendulum spring_mass n_body hopperphysics"
+# Override freely, e.g. SYSTEMS="pendulum duffing" bash scripts/run_experiments_hermite.sh
+SYSTEMS="${SYSTEMS:-damped_harmonic harmonic_oscillator pendulum duffing double_pendulum spring_mass n_body}"
 
 run_system () {
   local system="$1"
   for cfg in "${system}" "${system}_sparse" "${system}_v_sparse" "${system}_vv_sparse"; do
     for kind in hermite_hedge hermite_pure; do
       python main.py --data_config "$cfg" --interpolant_kind "$kind" \
-        --pairs "$PAIRS" --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS"
+        --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
     done
-    # matched-degree baseline (cubic) + linear
+    # SplineFlow baseline: matched-degree cubic B-spline (paper's "SplineFlow")
     python main.py --data_config "$cfg" --interpolant_kind bspline --degree 3 \
-      --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS"
-    python main.py --data_config "$cfg" --interpolant_kind linear \
-      --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS"
+      --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
+    # linear: extra ablation, only if explicitly requested
+    if [ "$INCLUDE_LINEAR" = "1" ]; then
+      python main.py --data_config "$cfg" --interpolant_kind linear \
+        --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
+    fi
   done
 }
 
-# Start with damped harmonic at the sparsest setting, per the brief.
-run_system damped_harmonic
-run_system harmonic_oscillator
+for sys in $SYSTEMS; do
+  run_system "$sys"
+done
 
 echo "Done. Results under results/${EXP_NAME}_<config>_<kind>_${MASK_MODE}[/_N]"
