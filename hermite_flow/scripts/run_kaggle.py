@@ -98,6 +98,10 @@ def parse_args():
     p.add_argument("--per_gpu", type=int, default=4)
     p.add_argument("--batch_size", type=int, default=256)
     p.add_argument("--eval_every", type=int, default=500)
+    p.add_argument("--heartbeat", type=int, default=60,
+                   help="seconds between progress lines (0 disables)")
+    p.add_argument("--detail_every", type=int, default=10,
+                   help="print the per-run bar block every Nth heartbeat")
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--force", action="store_true")
     p.add_argument("--prepare_only", action="store_true")
@@ -210,7 +214,9 @@ def config_pairs(cfg):
 
 
 def command_for(args, run):
-    cmd = [sys.executable, "main.py",
+    # -u: without it the child block-buffers stdout into the log file and the
+    # heartbeat below lags the real epoch count by thousands of lines.
+    cmd = [sys.executable, "-u", "main.py",
            "--data_config", run["config"],
            "--interpolant_kind", run["kind"],
            "--mask_mode", run["mask"],
@@ -247,6 +253,47 @@ def harvest(run, log_path):
         if rates:
             out["fallback_pct"] = max(float(r) for r in rates)
     return out
+
+
+EPOCH_RE = re.compile(rb"\[Epoch\s+(\d+)\]")
+
+
+def epochs_from_log(path, tail=65536):
+    """Last epoch number a run has logged. main.py prints one line per epoch."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - tail))
+            hits = EPOCH_RE.findall(fh.read())
+        return int(hits[-1]) if hits else 0
+    except OSError:
+        return 0
+
+
+def bar(frac, width=22):
+    filled = int(round(frac * width))
+    return "#" * filled + "-" * (width - filled)
+
+
+def heartbeat(t0, running, n_done, n_total, epochs_total, epochs_banked, detail):
+    live = [(it, epochs_from_log(it["log"])) for it in running]
+    ep_now = epochs_banked + sum(e for _, e in live)
+    el = time.time() - t0
+    eps = ep_now / el if el > 0 else 0.0
+    remain = max(epochs_total - ep_now, 0)
+    eta = remain / eps / 3600 if eps > 0 else float("nan")
+    hh, rem = divmod(int(el), 3600)
+    mm, ss = divmod(rem, 60)
+    print(f"[{hh:d}:{mm:02d}:{ss:02d}] done {n_done}/{n_total} | running {len(running)} "
+          f"| {ep_now:,}/{epochs_total:,} ep ({100.0 * ep_now / epochs_total:.1f}%) "
+          f"| {eps:.1f} ep/s | ETA {eta:.1f}h", flush=True)
+    if detail and live:
+        for it, e in sorted(live, key=lambda x: x[1]):
+            frac = e / it["target"]
+            print(f"           gpu{it['gpu']} {it['run']['label']:14s} "
+                  f"{it['run']['sparsity']:10s} {it['run']['mask']:8s} "
+                  f"{bar(frac)} {100 * frac:5.1f}%  {e:>6,}/{it['target']:,}", flush=True)
+
 
 
 def main():
@@ -299,6 +346,9 @@ def main():
 
     running, done, t0 = [], [], time.time()
     queue = list(pending)
+    epochs_total = max(len(pending) * args.epochs, 1)
+    epochs_banked = 0          # epochs from runs that have already exited
+    last_beat, beat_n = time.time(), 0
     while queue or running:
         while queue and len(running) < slots:
             run = queue.pop(0)
@@ -309,10 +359,17 @@ def main():
                                     env=dict(os.environ, CUDA_VISIBLE_DEVICES=gpu),
                                     stdout=fh, stderr=subprocess.STDOUT)
             running.append({"run": run, "proc": proc, "fh": fh, "gpu": gpu,
-                            "log": log_path, "t": time.time()})
+                            "log": log_path, "t": time.time(),
+                            "target": args.epochs})
             print(f"[{time.time() - t0:7.1f}s] START  gpu{gpu}  {run['tag']}", flush=True)
 
         time.sleep(5)
+        if args.heartbeat and time.time() - last_beat >= args.heartbeat:
+            last_beat = time.time()
+            beat_n += 1
+            heartbeat(t0, running, len(done), len(pending), epochs_total, epochs_banked,
+                      detail=(args.detail_every and beat_n % args.detail_every == 0))
+
         for it in list(running):
             rc = it["proc"].poll()
             if rc is None:
@@ -321,6 +378,7 @@ def main():
             it["fh"].close()
             it["rc"] = rc
             done.append(it)
+            epochs_banked += epochs_from_log(it["log"]) or args.epochs
             info = harvest(it["run"], it["log"])
             rec = dict(it["run"], returncode=rc,
                        minutes=round((time.time() - it["t"]) / 60, 2),
