@@ -258,14 +258,29 @@ def main():
 
     gpus = [g.strip() for g in args.gpus.split(",") if g.strip()]
     slots = len(gpus) * args.per_gpu
-    est = len(runs) * args.epochs * 0.08 / slots / 3600
+    # Honest ETA range. 0.08 s/epoch was measured with TWO processes sharing
+    # one T4, i.e. that card was already delivering ~25 epochs/s = ~4.9 TFLOPS,
+    # about 60% of its fp32 peak. The GPU is therefore close to saturated at 2
+    # processes and extra slots mostly divide the same throughput rather than
+    # adding to it:
+    #   lo -> per-run time unchanged as slots grow (perfect scaling)
+    #   hi -> per-GPU throughput pinned at ~25 epochs/s
+    work = len(runs) * args.epochs
+    n_cache = len({(r['config'], r['mask']) for r in runs})
+    fixed_h = (len(runs) * 90 / slots + 12 * n_cache) / 3600
+    est_lo = work * 0.08 / slots / 3600 + fixed_h
+    est_hi = work / (25.0 * len(gpus)) / 3600 + fixed_h
 
     print(f"systems     : {sorted({r['system'] for r in runs})}")
     print(f"seeds       : {sorted({r['seed'] for r in runs})}")
     print(f"interpolants: {sorted({r['label'] for r in runs})}")
     print(f"runs        : {len(runs)}  ({args.epochs} epochs each)")
     print(f"parallelism : {len(gpus)} GPU(s) x {args.per_gpu} = {slots} concurrent")
-    print(f"rough ETA   : {est:.1f}h at the measured 0.08 s/epoch\n")
+    print(f"ETA         : {est_lo:.1f}-{est_hi:.1f}h  (perfect-scaling .. GPU-saturated)")
+    if est_hi > 11.0:
+        print("  WARNING: upper estimate exceeds Kaggle's 12h session cap -- "
+              "split into fewer seeds/systems per session.")
+    print()
 
     if args.dry_run:
         for r in runs:
