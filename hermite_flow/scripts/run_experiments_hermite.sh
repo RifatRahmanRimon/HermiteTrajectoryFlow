@@ -23,9 +23,19 @@
 set -euo pipefail
 
 EXP_NAME="${EXP_NAME:-hermite}"
-MASK_MODE="${MASK_MODE:-per_dof}"      # per_dof (paper scope) | per_dim (repo default)
+MASK_MODE="${MASK_MODE:-per_dof}"      # DECIDED DEFAULT: per_dof (paired-sensor scope; drops the
+                                       # whole paired state together). Baselines (bspline) run under
+                                       # the SAME mask_mode, so the comparison is fair. Use per_dim
+                                       # only to reproduce the original SplineFlow per-coordinate numbers.
 EPOCHS="${EPOCHS:-10000}"
 SEED="${SEED:-42}"
+INCLUDE_LINEAR="${INCLUDE_LINEAR:-0}"  # 1 = also run the linear interpolant (ablation, NOT a paper baseline)
+
+# Baselines produced by this sweep:
+#   hermite_hedge / hermite_pure  -> the proposed method
+#   bspline (--degree 3)          -> the SplineFlow baseline (paper's "SplineFlow" numbers)
+#   linear                        -> extra ablation, off by default (INCLUDE_LINEAR=1 to add)
+# The TFM baseline is a SEPARATE codebase (../baselines/TFM); see the top-level README.
 
 # The (position:velocity) pairs live in each data_config JSON ("pairs" field), so
 # main.py resolves them automatically -- no need to pass --pairs here. State is
@@ -43,11 +53,14 @@ run_system () {
       python main.py --data_config "$cfg" --interpolant_kind "$kind" \
         --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
     done
-    # matched-degree baseline (cubic) + linear
+    # SplineFlow baseline: matched-degree cubic B-spline (paper's "SplineFlow")
     python main.py --data_config "$cfg" --interpolant_kind bspline --degree 3 \
       --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
-    python main.py --data_config "$cfg" --interpolant_kind linear \
-      --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
+    # linear: extra ablation, only if explicitly requested
+    if [ "$INCLUDE_LINEAR" = "1" ]; then
+      python main.py --data_config "$cfg" --interpolant_kind linear \
+        --mask_mode "$MASK_MODE" --exp_name "$EXP_NAME" --epochs "$EPOCHS" --seed "$SEED"
+    fi
   done
 }
 

@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exp_name", type=str, default="base", help="Experiment name")
     parser.add_argument("--dynamics_kind", type=str, default="ode", choices=["ode", "sde_constant_sigma", "sde_quadratic_sigma", "sde_time_varying_sigma"], help="whether we have ode/sde dynamics")
     parser.add_argument("--pairs", type=str, default="", help="position:velocity index pairs for the hermite interpolants, e.g. '0:1,2:3'; empty means no pairs")
-    parser.add_argument("--mask_mode", type=str, default="per_dim", choices=["per_dim", "per_dof"], help="missingness granularity: per_dim (independent, paper-comparable) or per_dof (drops the whole state at a time step)")
+    parser.add_argument("--mask_mode", type=str, default="per_dof", choices=["per_dim", "per_dof"], help="missingness granularity. DEFAULT per_dof: a drop removes the whole paired state at a time step (the paired-sensor scope this method targets). per_dim: each coordinate drops independently (only for reproducing the original SplineFlow per-coordinate protocol)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for training RNG (torch/numpy/random): model init, conditional-path noise, and DataLoader shuffling")
     return parser.parse_args()
 

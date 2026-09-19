@@ -1,5 +1,9 @@
 # Hermite Conditional Paths for Flow Matching
 
+> **Start at the [top-level README](../README.md)** for the project overview, the
+> repository layout, and how to run every baseline (including SplineFlow and TFM).
+> This file is the detailed reference for the `hermite_flow` pipeline itself.
+
 Velocity-aware conditional paths for trajectory flow matching. Instead of fitting
 every state dimension independently (the B-spline baseline), the position
 interpolant is constrained by the *observed velocity* of its paired dimension, so
@@ -59,8 +63,8 @@ EPOCHS=10000 MASK_MODE=per_dof SEED=42 bash scripts/run_experiments_hermite.sh
 |---|---|
 | `hermite_hedge` | position = cubic Hermite `H` (uses observed velocity as tangent); velocity = plain B-spline of `v`. `d` fits. Acceleration target stays smooth. |
 | `hermite_pure`  | position = `H`; velocity = `H'`, so `d/dt position = velocity` holds *everywhere*. `d/2` fits. Acceleration target `H''` is piecewise-linear (C¹). |
-| `bspline`       | baseline: independent B-spline per dimension (`--degree k`). The matched-degree competitor for cubic Hermite is `--degree 3`. |
-| `linear`        | baseline: piecewise-linear per dimension. |
+| `bspline`       | **the SplineFlow baseline** — independent B-spline per dimension (`--degree k`); use `--degree 3` for the matched-degree competitor to cubic Hermite. This *is* the paper's "SplineFlow" (not a separate program). |
+| `linear`        | piecewise-linear per dimension — an ablation, **not** a paper baseline; off by default in the sweep. |
 
 ---
 
@@ -92,14 +96,14 @@ Each system has four missingness levels via the config suffix:
 
 ## 5. Masking (`--mask_mode`)
 
-- `per_dof` **(use this for the paper)** — a dropped observation removes the whole
-  state at that time step, so position and its velocity always appear together.
-  This matches the paired-sensor scope the method is designed for.
-- `per_dim` (repo default, backward-compatible) — every entry is dropped
-  independently, so a position and its velocity can go missing separately. This
-  breaks the pairing assumption; at high missingness the Hermite fit is starved of
-  jointly-observed knots. Kept only for reproducing the original SplineFlow setup;
-  **not** comparable to the paired-scope results.
+- `per_dof` **(the default; used for all our experiments)** — a dropped observation
+  removes the whole state at that time step, so position and its velocity always
+  appear together. This matches the paired-sensor scope the method is designed for,
+  and the baselines are run under the same mode for a fair comparison.
+- `per_dim` (opt-in) — every entry is dropped independently, so a position and its
+  velocity can go missing separately. This breaks the pairing assumption; at high
+  missingness the Hermite fit is starved of jointly-observed knots. Kept **only** for
+  reproducing the original SplineFlow per-coordinate protocol; not our setting.
 
 ---
 
